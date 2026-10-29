@@ -1,0 +1,295 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TOWNLY | Local Food Delivery</title>
+<style>
+:root{--blue:#173e8c;--gold:#f6bd45;--bg:#f6f8fc;--ink:#18243b}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--blue);color:white;padding:18px 5%;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.logo{font-size:26px;font-weight:800;letter-spacing:1px}
+.logo span{color:var(--gold)}
+button{border:0;border-radius:10px;padding:11px 15px;font-weight:700;cursor:pointer}
+.primary{background:var(--blue);color:white}
+.gold{background:var(--gold);color:#18243b}
+.light{background:white;color:var(--blue)}
+main{max-width:1000px;margin:auto;padding:22px 16px}
+.hero{background:#e8eefb;border-radius:18px;padding:28px 22px;margin-bottom:22px}
+.hero h1{font-size:clamp(28px,6vw,44px);margin:0 0 10px}
+input,textarea{width:100%;padding:12px;border:1px solid #ccd4e2;border-radius:9px;margin:6px 0 12px;font:inherit}
+section{background:white;border-radius:15px;padding:18px;margin:18px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.card{border:1px solid #e3e8f1;border-radius:12px;padding:15px}
+.price{font-weight:800;color:var(--blue)}
+.small{font-size:13px;color:#667085}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#notice{padding:12px;border-radius:10px;background:#fff3cf;display:none;margin:12px 0}
+footer{text-align:center;padding:28px;color:#667085}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">TOWN<span>LY</span></div>
+  <div>
+    <button class="light" id="accountBtn">Login / Sign up</button>
+    <button class="gold" id="cartBtn">Cart (<span id="count">0</span>)</button>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <p><b>YOUR TOWN. YOUR FOOD.</b></p>
+    <h1>Find It Local.<br>Get It Delivered.</h1>
+    <p>Discover local restaurants and your favourite food.</p>
+    <button class="primary" onclick="document.querySelector('#restaurants').scrollIntoView({behavior:'smooth'})">Explore restaurants</button>
+  </div>
+
+  <div id="notice" role="status"></div>
+
+  <section id="account" hidden>
+    <h2>Customer account</h2>
+    <p class="small">Create an account or sign in to place an order.</p>
+    <label for="name">Full name (for signup)</label>
+    <input id="name" autocomplete="name" placeholder="Your name">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" placeholder="Password">
+    <button class="primary" id="signup">Create account</button>
+    <button class="gold" id="login">Login</button>
+    <button id="logout" hidden>Logout</button>
+    <p id="authStatus" class="small" aria-live="polite"></p>
+  </section>
+
+  <section id="restaurants">
+    <h2>Local restaurants</h2>
+    <p class="small">Restaurants will appear here when added to the TOWNLY database.</p>
+    <div class="grid" id="restaurantList"></div>
+  </section>
+
+  <section id="menu" hidden>
+    <div class="row">
+      <h2 id="menuTitle">Food menu</h2>
+      <button id="backRestaurants">Back</button>
+    </div>
+    <div class="grid" id="menuList"></div>
+  </section>
+
+  <section id="cart" hidden>
+    <h2>Your cart</h2>
+    <div id="cartList"></div>
+    <h3 id="total">Total: ₹0.00</h3>
+    <label for="address">Delivery address</label>
+    <textarea id="address" rows="2" placeholder="House, street, area, town"></textarea>
+    <label for="phone">Phone number</label>
+    <input id="phone" type="tel" autocomplete="tel" placeholder="Contact number">
+    <button class="primary" id="checkout">Place order · Cash on delivery</button>
+    <p class="small">Sign in is required. Payment is not collected online.</p>
+  </section>
+
+  <section id="myOrders">
+    <h2>My orders</h2>
+    <button class="primary" id="loadOrders">View my orders</button>
+    <div id="ordersList"></div>
+  </section>
+</main>
+
+<footer>TOWNLY · Find It Local. Get It Delivered.</footer>
+
+<script type="module">
+import { createClient } from
+'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+// Add your Supabase Project URL and publishable/anon key here.
+// Never use a service_role or secret key in this public file.
+const SUPABASE_URL = 'PASTE_YOUR_PROJECT_URL';
+const SUPABASE_KEY = 'PASTE_YOUR_PUBLISHABLE_KEY';
+
+const $ = id => document.getElementById(id);
+const money = n => '₹' + Number(n).toFixed(2);
+let db = null, user = null, cart = [], restaurants = [];
+
+function message(text) {
+  $('notice').textContent = text;
+  $('notice').style.display = 'block';
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function hideMessage() { $('notice').style.display = 'none'; }
+function show(id) { $(id).hidden = false; }
+function hide(id) { $(id).hidden = true; }
+
+$('accountBtn').onclick = () => {
+  $('account').hidden = !$('account').hidden;
+  hideMessage();
+};
+$('cartBtn').onclick = () => {
+  renderCart();
+  show('cart');
+  $('cart').scrollIntoView({behavior:'smooth'});
+};
+$('backRestaurants').onclick = () => {
+  show('restaurants'); hide('menu');
+};
+
+function updateAuth() {
+  $('accountBtn').textContent = user
+    ? (user.email || 'Account') : 'Login / Sign up';
+  $('logout').hidden = !user;
+}
+function updateCount() {
+  $('count').textContent = cart.reduce((s,i)=>s+i.quantity,0);
+}
+
+async function loadRestaurants() {
+  const list = $('restaurantList');
+  list.replaceChildren();
+  if (!db) {
+    list.textContent = 'Add your Supabase project details to connect the menu.';
+    return;
+  }
+  const {data,error} = await db.from('restaurants')
+    .select('id,name,description,address')
+    .eq('is_active',true).order('name');
+  if(error) { list.textContent='Could not load restaurants. Check database setup.'; return; }
+  restaurants = data || [];
+  if(!restaurants.length) {
+    list.textContent='No restaurants added yet. Your admin setup comes next.';
+    return;
+  }
+  restaurants.forEach(r=>{
+    const card=document.createElement('div'); card.className='card';
+    const h=document.createElement('h3'); h.textContent=r.name;
+    const p=document.createElement('p'); p.textContent=r.description||r.address||'Local restaurant';
+    const b=document.createElement('button'); b.className='primary'; b.textContent='View menu';
+    b.onclick=()=>loadMenu(r);
+    card.append(h,p,b); list.append(card);
+  });
+}
+
+async function loadMenu(r) {
+  const {data,error}=await db.from('menu_items')
+    .select('id,name,description,price')
+    .eq('restaurant_id',r.id).eq('is_available',true).order('name');
+  if(error){message('Could not load menu. Please try again.');return;}
+  $('menuTitle').textContent=r.name;
+  const list=$('menuList'); list.replaceChildren();
+  (data||[]).forEach(item=>{
+    const card=document.createElement('div'); card.className='card';
+    const h=document.createElement('h3'); h.textContent=item.name;
+    const p=document.createElement('p'); p.textContent=item.description||'Freshly prepared';
+    const price=document.createElement('p'); price.className='price'; price.textContent=money(item.price);
+    const b=document.createElement('button'); b.className='gold'; b.textContent='Add to cart';
+    b.onclick=()=>{
+      const found=cart.find(i=>i.id===item.id);
+      if(found) found.quantity++;
+      else cart.push({...item,quantity:1});
+      updateCount(); message(item.name+' added to cart.');
+    };
+    card.append(h,p,price,b); list.append(card);
+  });
+  hide('restaurants'); show('menu');
+  $('menu').scrollIntoView({behavior:'smooth'});
+}
+
+function renderCart() {
+  const list=$('cartList'); list.replaceChildren();
+  cart.forEach(item=>{
+    const row=document.createElement('div'); row.className='row';
+    const label=document.createElement('span');
+    label.textContent=`${item.name} × ${item.quantity}`;
+    const amount=document.createElement('b'); amount.textContent=money(item.price*item.quantity);
+    const remove=document.createElement('button'); remove.textContent='−';
+    remove.setAttribute('aria-label','Remove one '+item.name);
+    remove.onclick=()=>{
+      item.quantity--;
+      if(item.quantity<=0) cart=cart.filter(i=>i.id!==item.id);
+      updateCount(); renderCart();
+    };
+    row.append(label,amount,remove); list.append(row);
+  });
+  $('total').textContent='Estimated total: '+money(cart.reduce((s,i)=>s+i.price*i.quantity,0));
+}
+
+async function refreshUser() {
+  if(!db) return;
+  const {data}=await db.auth.getSession();
+  user=data.session?.user||null;
+  updateAuth();
+}
+async function signup() {
+  const email=$('email').value.trim(), password=$('password').value, name=$('name').value.trim();
+  if(!email||password.length<8||!name){message('Enter your name, email and a password of at least 8 characters.');return;}
+  const {error}=await db.auth.signUp({email,password,options:{data:{full_name:name}}});
+  $('authStatus').textContent=error?error.message:'Signup submitted. Check your email if confirmation is required.';
+}
+async function login() {
+  const {data,error}=await db.auth.signInWithPassword({
+    email:$('email').value.trim(),password:$('password').value
+  });
+  $('authStatus').textContent=error?error.message:'Login successful.';
+  if(!error){user=data.user;updateAuth();}
+}
+async function logout() {
+  const {error}=await db.auth.signOut();
+  if(error){message(error.message);return;}
+  user=null;updateAuth();message('You have logged out.');
+}
+async function checkout() {
+  if(!user){message('Please login before placing an order.');show('account');return;}
+  if(!cart.length){message('Your cart is empty.');return;}
+  const address=$('address').value.trim(), phone=$('phone').value.trim();
+  if(!address||!phone){message('Enter your delivery address and phone number.');return;}
+  $('checkout').disabled=true;
+  try {
+    const {data,error}=await db.rpc('place_townly_order',{
+      p_delivery_address:address,
+      p_phone:phone,
+      p_items:cart.map(i=>({menu_item_id:i.id,quantity:i.quantity}))
+    });
+    if(error) throw error;
+    cart=[];updateCount();renderCart();
+    message('Order placed! Order ID: '+data);
+    await loadOrders();
+  } catch(e) {
+    message('Order could not be placed: '+e.message);
+  } finally {$('checkout').disabled=false;}
+}
+async function loadOrders() {
+  if(!user){message('Please login to view your orders.');return;}
+  const {data,error}=await db.from('orders')
+    .select('id,status,total_amount,created_at')
+    .order('created_at',{ascending:false}).limit(20);
+  const list=$('ordersList');list.replaceChildren();
+  if(error){list.textContent='Could not load orders: '+error.message;return;}
+  if(!data?.length){list.textContent='No orders yet.';return;}
+  data.forEach(o=>{
+    const p=document.createElement('p');
+    p.textContent=`${o.status} · ${money(o.total_amount)} · ${new Date(o.created_at).toLocaleString()}`;
+    list.append(p);
+  });
+}
+
+$('signup').onclick=signup;
+$('login').onclick=login;
+$('logout').onclick=logout;
+$('checkout').onclick=checkout;
+$('loadOrders').onclick=loadOrders;
+
+if(!SUPABASE_URL.startsWith('https://')||SUPABASE_KEY.startsWith('PASTE_')) {
+  message('Website design ready. Add your Supabase URL and publishable key to enable accounts, menus and orders.');
+  await loadRestaurants();
+} else {
+  db=createClient(SUPABASE_URL,SUPABASE_KEY);
+  await refreshUser();
+  db.auth.onAuthStateChange((_event,session)=>{
+    user=session?.user||null; updateAuth();
+  });
+  await loadRestaurants();
+}
+</script>
+</body>
+</html>
